@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment Variables (Secrets)
+.env
+.env.local
+
+# Local MongoDB Data (CRITICAL: Do not commit live DB files)
+mongo-data/
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
