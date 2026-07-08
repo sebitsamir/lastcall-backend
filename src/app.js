@@ -77,10 +77,10 @@ app.use(hpp({
 app.use(compression());
 
 // 4. Routes & Health Checks
-// Basic Health Check (Mount BEFORE rate limiter in production)
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'healthy', service: 'lastCall API' });
-});
+// Health Check (Mounted BEFORE rate limiter so monitoring tools aren't blocked)
+const healthRouter = require('./routes/health');
+app.use('/health', healthRouter);
+
 
 //TO: Mount API here in next step
 //app.use('/api/v1', routes);
