@@ -10,15 +10,22 @@ const compression = require('compression');
 
 // Wrap xss in a custom Express middleware
 const xssSanitizer = (req, res, next) => {
-    // Loop through the request body and sanitize any string values
-    if (req.body) {
-        for (const key in req.body) {
-            if (typeof req.body[key] === 'string') {
-                req.body[key] = xss(req.body[key]);
+    // Helper function to recursively sanitize nested objects
+    const sanitizeObject = (obj) => {
+        for (const key in obj) {
+            if (typeof obj[key] === 'string') {
+                obj[key] = xss(obj[key]);
+            } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+                sanitizeObject(obj[key]); // Recurse into nested objects/arrays
             }
         }
-    }
-    next(); // Pass control to the next middleware
+    };
+
+    if (req.body) sanitizeObject(req.body);
+    if (req.query) sanitizeObject(req.query);
+    if (req.params) sanitizeObject(req.params);
+
+    next();
 };
 
 
@@ -33,7 +40,7 @@ app.use(helmet());
 
 //CORS: Allow the frontend to talk to this API
 app.use(cors({
-    origin: process.env.CLIENT_URL || 'https://localhost:5173',
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
     credentials: true //Allow httpOnly cookies to be sent
 }));
 
@@ -82,8 +89,9 @@ const healthRouter = require('./routes/health');
 app.use('/health', healthRouter);
 
 
-//TO: Mount API here in next step
-//app.use('/api/v1', routes);
+// Mount Api routes
+const authRoutes = require('./routes/auth');
+app.use('/api/v1/auth', authRoutes);
 
 // 5. Error Handling
 // Catch unhandled routes (404)
