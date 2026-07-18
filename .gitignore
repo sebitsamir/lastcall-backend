@@ -1,20 +1,26 @@
-# Dependencies
-node_modules/
-
-# Environment Variables (Secrets)
+# Environment variables
 .env
 .env.local
+.env.*.local
 
-# Local MongoDB Data (CRITICAL: Do not commit live DB files)
-mongo-data/
+# Dependencies
+node_modules/
 
 # Logs
 logs/
 *.log
+npm-debug.log*
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Testing
-coverage/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build output
+dist/
+build/

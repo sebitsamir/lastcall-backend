@@ -1,23 +1,50 @@
-require('dotenv').config();
-const app = require('./app');
-const connectDB = require('./config/db');
-const logger = require('./utils/logger');
+require("dotenv").config();
+const http = require("http");
+const mongoose = require("mongoose");
+const { Server } = require("socket.io");
+const app = require("./app");
+const connectDB = require("./config/db");
+const logger = require("./utils/logger");
+const { Socket } = require("dgram");
 
 const PORT = process.env.PORT || 3000;
 
-// 1. Connect to Database
+// 1. Create HTTP Server & Attach Socket.io
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || "https://localhost:5173",
+    credentials: true,
+  },
+});
+
+// Make 'io' accessible globally in controllers via req.app.get('io')
+app.set("io", io);
+
+// 2. Socket.io Connection Logic
+io.on("connection", (socket) => {
+  logger.info(`Socket connect: ${socket.id}`);
+
+  // Clients will join specific auction rooms to get live updates
+  socket.on("joinAuction", (auctionId) => {
+    socket.join(`lastcall:auction:${auctionId}`);
+    logger.info(`socket ${socket.id} joined auction ${auctionId}`);
+  });
+
+  socket.on("disconnect", () => {
+    logger.info(`socket disconnected: ${socket.id}`);
+  });
+});
+
+// 3. Database Connection & Server startup
 connectDB().then(() => {
-    // 2. Start Server ONLY after DB is connected
-    const server = app.listen(PORT, () => {
-        logger.info(`LastCall API is running on port ${PORT}`);
-    });
-    
-    // 3. Handle Unhandled Rejections (Graceful Shutdown Prep)
-    process.on('unhandledRejection', (err) => {
-        logger.error('UNHANDLED REJECTION! Shutting down...');
-        logger.error(err.name, err.message);
-        server.close(() => {
-            process.exit(1);
-        });
-    });
+  const serverInstance = server.listen(PORT, () => {
+    logger.info(`lastCall API running on port ${PORT}`);
+  });
+
+  // 4. Graceful shutdown Handler
+  process.on("unhandledRejection", (err) => {
+    logger.error("UNHANDLED REJECTION! Shutting down...");
+    serverInstance.close(() => process.exit(1));
+  });
 });
