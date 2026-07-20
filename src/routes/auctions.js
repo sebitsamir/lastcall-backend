@@ -1,15 +1,26 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const auctionController = require("../controllers/auctionController");
-const bidController = require("../controllers/bidController");
-const { protect } = require("../middleware/auth");
+const { protect } = require('../middleware/auth')
 
-// Public routes (Anyone can view auctions)
-router.get("/", auctionController.getAllAuctions);
-router.get("/:id", auctionController.getAuctionById);
+const auctionController = require('../controllers/auctionController');
 
-// Protected routes (Must be logged in)
-router.post("/", protect, auctionController.createAuction);
-router.post("/:auctionId/bid", protect, bidController.placeBid); // The Masterpiece
+// Make sure this path is correct for your project structure!
+const upload = require('../middleware/upload'); 
+
+// Public routes
+router.get('/', auctionController.getAuctions);
+router.get('/:id', auctionController.getAuctionById);
+
+// Protected routes
+router.use(protect); 
+
+router.post(
+  '/',
+  upload.array('images', 5), // This will now work perfectly
+  auctionController.createAuction
+);
+
+router.patch('/:id', auctionController.updateAuction);
+router.delete('/:id', auctionController.cancelAuction);
 
 module.exports = router;
