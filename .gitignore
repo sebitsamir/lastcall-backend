@@ -32,3 +32,6 @@ Thumbs.db
 # Build outputs
 dist/
 build/
+
+# Local MongoDB data
+mongo-data/
