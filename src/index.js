@@ -6,6 +6,7 @@ const app = require("./app");
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 const { Socket } = require("dgram");
+const settlementJob = require("./jobs/settlementJob");
 
 const PORT = process.env.PORT || 3000;
 
@@ -41,6 +42,9 @@ connectDB().then(() => {
   const serverInstance = server.listen(PORT, () => {
     logger.info(`lastCall API running on port ${PORT}`);
   });
+
+  settlementJob.start();
+  logger.info("[Cron] Auction settlement job started");
 
   // 4. Graceful shutdown Handler
   process.on("unhandledRejection", (err) => {

@@ -1,117 +1,152 @@
 const mongoose = require("mongoose");
-const Auction = require("../models/Auction");
 const Bid = require("../models/Bid");
+const Auction = require("../models/Auction");
 const User = require("../models/User");
+const Transaction = require("../models/Transaction");
 const AppError = require("../utils/AppError");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require("../utils/apiResponse");
 
-// @desc Place a bid (The Escrow Transaction)
-// @route POST /api/v1/auctions/:auctionId/bid
 exports.placeBid = asyncHandler(async (req, res, next) => {
-  const { auctionId } = req.params; // Ensure your route is defined as /:auctionId
-  const { amount } = req.body;
-  const userId = req.user._id;
-
-  if (typeof amount !== "number" || amount <= 0) {
-    throw new AppError("Bid amount must be a positive number", 400);
+  // 1. SAFETY CHECK: Ensure protect middleware actually ran
+  if (!req.user || !req.user._id) {
+    return next(new AppError("Authentication failed. Please log in to bid.", 401));
   }
 
-  // 1. Start a MongoDB session & Transaction
+  const auctionId = req.params.id; // Matches the /:id/bid route
+  const { amount } = req.body;
+  const bidderId = req.user._id;
+
+  // 2. Find the auction
+  const auction = await Auction.findById(auctionId);
+  if (!auction) {
+    return next(new AppError("Auction not found", 404));
+  }
+
+  // 3. Validate auction status
+  if (auction.status !== "active") {
+    return next(new AppError("This auction is not currently active", 400));
+  }
+
+  // 4. Prevent seller from bidding on their own auction
+  if (auction.seller.toString() === bidderId.toString()) {
+    return next(new AppError("You cannot bid on your own auction", 403));
+  }
+
+  // 5. Validate bid amount
+  if (amount <= auction.currentBid) {
+    return next(new AppError(`Bid must be higher than the current bid of ${auction.currentBid}`, 409));
+  }
+
+  // 6. Check bidder's balance
+  const bidder = await User.findById(bidderId);
+  if (bidder.availableBalance < amount) {
+    return next(new AppError("Insufficient available balance to place this bid", 422));
+  }
+
+  // 7. Execute Transaction (Escrow Logic)
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // 2. Fetch data within the transaction session
-    const auction = await Auction.findById(auctionId).session(session);
-    if (!auction) throw new AppError("Auction not found", 404);
-
-    const now = new Date();
-    if (auction.status !== "active" || now > auction.endTime) {
-      throw new AppError("This auction is no longer active", 400);
-    }
-
-    if (amount <= auction.currentBid) {
-      throw new AppError(
-        `Bid must be strictly higher than current bid ($${auction.currentBid})`,
-        409,
-      );
-    }
-
-    const user = await User.findById(userId).session(session);
-    if (!user) throw new AppError("User not found", 404);
-
-    // FIX 2: Use 'availableBalance' consistently
-    if (user.availableBalance < amount) {
-      throw new AppError(
-        `Insufficient funds. Available: $${user.availableBalance}`,
-        422,
-      );
-    }
-
-    // 3. Unfreeze the previous highest bidder's funds (Escrow Release)
-    if (auction.currentHighestBidder) {
+    // A. If there was a previous highest bidder, unfreeze their money
+    if (auction.currentHighestBidder && auction.currentBid > 0) {
       await User.findByIdAndUpdate(
         auction.currentHighestBidder,
         {
           $inc: {
-            availableBalance: auction.currentBid, // Give money back
-            frozenBalance: -auction.currentBid, // Remove from Escrow
+            availableBalance: auction.currentBid,
+            frozenBalance: -auction.currentBid,
           },
         },
-        { session, new: true },
+        { session }
+      );
+
+      await Transaction.create(
+        [
+          {
+            user: auction.currentHighestBidder,
+            type: "bid_released",
+            amount: auction.currentBid,
+            description: `Outbid on auction: ${auction.title}`,
+            auction: auction._id,
+            status: "completed",
+          },
+        ],
+        { session }
       );
     }
 
-    // 4. Freeze the new Bidder's funds (Escrow lock)
+    // B. Freeze the new bidder's money
     await User.findByIdAndUpdate(
-      userId,
+      bidderId,
       {
         $inc: {
-          availableBalance: -amount, // Deduct from available
-          frozenBalance: amount, // Lock in Escrow
+          availableBalance: -amount,
+          frozenBalance: amount,
         },
       },
-      { session },
+      { session }
     );
 
-    // 5. Create the Bid Record
-    const [bid] = await Bid.create(
+    await Transaction.create(
+      [
+        {
+          user: bidderId,
+          type: "bid_frozen",
+          amount: amount,
+          description: `Bid placed on auction: ${auction.title}`,
+          auction: auction._id,
+          status: "completed",
+        },
+      ],
+      { session }
+    );
+
+    // C. Update the auction with the new bid
+    auction.currentBid = amount;
+    auction.currentHighestBidder = bidderId;
+    await auction.save({ session });
+
+    // D. Create the Bid record
+    await Bid.create(
       [
         {
           auction: auctionId,
-          bidder: userId,
-          amount,
+          bidder: bidderId,
+          amount: amount,
         },
       ],
-      { session },
+      { session }
     );
 
-    // 6. Update Auction State
-    auction.currentBid = amount;
-    auction.currentHighestBidder = userId;
-    await auction.save({ session });
-
-    // 7. Commit the Transaction (All or Nothing)
     await session.commitTransaction();
 
-    // 8. Real-time Broadcast (AFTER commit so we don't broadcast failed bids)
+    // E. Emit WebSocket event (if io is available)
     const io = req.app.get("io");
     if (io) {
       io.to(`lastcall:auction:${auctionId}`).emit("newBid", {
-        bidAmount: amount,
-        bidderName: user.name,
-        timestamp: new Date(),
+        auctionId,
+        amount,
+        bidderName: bidder.name,
       });
     }
 
-    ApiResponse.created(res, { bid }, "Bid placed successfully");
+    ApiResponse.success(
+      res,
+      {
+        auction: {
+          id: auction._id,
+          currentBid: auction.currentBid,
+          currentHighestBidder: auction.currentHighestBidder,
+        },
+      },
+      "Bid placed successfully"
+    );
   } catch (error) {
-    // 9. Rollback on any error
     await session.abortTransaction();
-    next(error); // Pass to globalErrorHandler (asyncHandler already catches, but next is safer)
+    next(error);
   } finally {
-    // 10. Always end the session to prevent connection leaks
     session.endSession();
   }
 });

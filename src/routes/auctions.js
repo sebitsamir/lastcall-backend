@@ -1,26 +1,32 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { protect } = require('../middleware/auth')
 
-const auctionController = require('../controllers/auctionController');
+// 1. Import the protect middleware
+const { protect } = require("../middleware/auth");
 
-// Make sure this path is correct for your project structure!
-const upload = require('../middleware/upload'); 
+// 2. Import controllers
+const auctionController = require("../controllers/auctionController");
+const bidController = require("../controllers/bidController");
+const upload = require("../middleware/upload");
 
-// Public routes
-router.get('/', auctionController.getAuctions);
-router.get('/:id', auctionController.getAuctionById);
+// ==========================================
+// PUBLIC ROUTES
+// ==========================================
+router.get("/", auctionController.getAuctions);
+router.get("/:id", auctionController.getAuctionById);
 
-// Protected routes
-router.use(protect); 
-
+// ==========================================
+// PROTECTED ROUTES (protect MUST be here)
+// ==========================================
 router.post(
-  '/',
-  upload.array('images', 5), // This will now work perfectly
+  "/",
+  protect,
+  upload.array("images", 5),
   auctionController.createAuction
 );
 
-router.patch('/:id', auctionController.updateAuction);
-router.delete('/:id', auctionController.cancelAuction);
+router.patch("/:id", protect, auctionController.updateAuction);
+router.delete("/:id", protect, auctionController.cancelAuction);
+router.post("/:id/bid", protect, bidController.placeBid);
 
 module.exports = router;
