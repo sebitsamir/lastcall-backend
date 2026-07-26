@@ -5,7 +5,6 @@ const { Server } = require("socket.io");
 const app = require("./app");
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
-const { Socket } = require("dgram");
 const settlementJob = require("./jobs/settlementJob");
 
 const PORT = process.env.PORT || 3000;
@@ -14,26 +13,26 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "https://localhost:5173",
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
     credentials: true,
   },
 });
 
-// Make 'io' accessible globally in controllers via req.app.get('io')
+global.io = io;
 app.set("io", io);
 
 // 2. Socket.io Connection Logic
 io.on("connection", (socket) => {
-  logger.info(`Socket connect: ${socket.id}`);
+  logger.info(`Socket connected: ${socket.id}`);
 
   // Clients will join specific auction rooms to get live updates
   socket.on("joinAuction", (auctionId) => {
     socket.join(`lastcall:auction:${auctionId}`);
-    logger.info(`socket ${socket.id} joined auction ${auctionId}`);
+    logger.info(`Socket ${socket.id} joined auction room: ${auctionId}`);
   });
 
   socket.on("disconnect", () => {
-    logger.info(`socket disconnected: ${socket.id}`);
+    logger.info(`Socket disconnected: ${socket.id}`);
   });
 });
 
@@ -43,6 +42,7 @@ connectDB().then(() => {
     logger.info(`lastCall API running on port ${PORT}`);
   });
 
+  // Start the settlement cron job
   settlementJob.start();
   logger.info("[Cron] Auction settlement job started");
 

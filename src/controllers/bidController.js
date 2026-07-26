@@ -6,6 +6,7 @@ const Transaction = require("../models/Transaction");
 const AppError = require("../utils/AppError");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require("../utils/apiResponse");
+const logger = require("../utils/logger");
 
 exports.placeBid = asyncHandler(async (req, res, next) => {
   // 1. SAFETY CHECK: Ensure protect middleware actually ran
@@ -13,7 +14,7 @@ exports.placeBid = asyncHandler(async (req, res, next) => {
     return next(new AppError("Authentication failed. Please log in to bid.", 401));
   }
 
-  const auctionId = req.params.id; // Matches the /:id/bid route
+  const auctionId = req.params.id;
   const { amount } = req.body;
   const bidderId = req.user._id;
 
@@ -120,33 +121,57 @@ exports.placeBid = asyncHandler(async (req, res, next) => {
       { session }
     );
 
+    // E. Commit the transaction
     await session.commitTransaction();
-
-    // E. Emit WebSocket event (if io is available)
-    const io = req.app.get("io");
-    if (io) {
-      io.to(`lastcall:auction:${auctionId}`).emit("newBid", {
-        auctionId,
-        amount,
-        bidderName: bidder.name,
-      });
-    }
-
-    ApiResponse.success(
-      res,
-      {
-        auction: {
-          id: auction._id,
-          currentBid: auction.currentBid,
-          currentHighestBidder: auction.currentHighestBidder,
-        },
-      },
-      "Bid placed successfully"
-    );
+    
   } catch (error) {
+    // Only abort if the transaction hasn't been committed yet
     await session.abortTransaction();
-    next(error);
+    return next(error);
   } finally {
     session.endSession();
   }
+
+
+  // REAL-TIME EVENTS & RESPONSE (OUTSIDE TRANSACTION)
+
+  // Emit Real-Time Events
+  if (global.io) {
+    logger.info(`Emitting newBid for auction: ${auctionId}`);
+    
+    // 1. Public event: Everyone watching sees the new bid
+    global.io.to(`lastcall:auction:${auctionId}`).emit("newBid", {
+      auctionId,
+      currentBid: auction.currentBid,
+      bidderName: bidder.name,
+      timestamp: new Date().toISOString(),
+    });
+
+    // 2. Private event: If there was a previous bidder, tell them they're outbid
+    if (
+      auction.currentHighestBidder &&
+      auction.currentHighestBidder.toString() !== bidderId.toString()
+    ) {
+      global.io.to(`lastcall:auction:${auctionId}`).emit("outbid", {
+        auctionId,
+        previousBid: auction.currentBid,
+        message: `You have been outbid on "${auction.title}"!`,
+      });
+    }
+  } else {
+    logger.warn("global.io is undefined! Real-time events will not fire.");
+  }
+
+  // Send Success Response
+  ApiResponse.success(
+    res,
+    {
+      auction: {
+        id: auction._id,
+        currentBid: auction.currentBid,
+        currentHighestBidder: auction.currentHighestBidder,
+      },
+    },
+    "Bid placed successfully"
+  );
 });

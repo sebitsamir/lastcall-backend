@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const Auction = require('../models/Auction');
 const User = require('../models/User');
-const Bid = require('../models/Bid');
 const Transaction = require('../models/Transaction');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
@@ -38,7 +37,7 @@ exports.settleAuction = asyncHandler(async (req, res, next) => {
 });
 
 // @desc Process auction settlement (Called by cron job or manually)
-// This the core logic that handles fund transfers
+// This is the core logic that handles fund transfers
 const processAuctionSettlement = async (auction) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -49,30 +48,30 @@ const processAuctionSettlement = async (auction) => {
             // 1. Transfer funds from winner's frozen balance to seller's available balance
             await User.findByIdAndUpdate(
                 auction.currentHighestBidder,
-                {
-                    $inc: {
-                        frozenBalance: -auction.currentBid, // Unfreeze winner's money
-                    },
-                },
+                { $inc: { frozenBalance: -auction.currentBid } }, // Unfreeze winner's money
                 { session }
             );
 
             await User.findByIdAndUpdate(
                 auction.seller,
-                {
-                    $inc: {
-                        availableBalance: auction.currentBid, // Pay the seller
-                    },
-                },
+                { $inc: { availableBalance: auction.currentBid } }, // Pay the seller
                 { session }
             );
 
-            // 2. Log transaction for both parties
+            // 2. Log transactions for BOTH parties
             await Transaction.create(
                 [
                     {
                         user: auction.currentHighestBidder,
                         type: "auction_won",
+                        amount: auction.currentBid,
+                        description: `Won auction: ${auction.title}`,
+                        auction: auction._id,
+                        status: "completed",
+                    },
+                    {
+                        user: auction.seller,
+                        type: "auction_payout",
                         amount: auction.currentBid,
                         description: `Received payment for auction: ${auction.title}`,
                         auction: auction._id,
@@ -88,6 +87,18 @@ const processAuctionSettlement = async (auction) => {
 
             await session.commitTransaction();
 
+            // EMIT REAL-TIME EVENT: Auction ended with a winner
+            const io = global.io;
+            if (io) {
+                io.to(`lastcall:auction:${auction._id}`).emit("auctionEnded", {
+                    auctionId: auction._id,
+                    status: "completed",
+                    winnerId: auction.currentHighestBidder,
+                    winningBid: auction.currentBid,
+                    message: `Auction ended! Winner paid ${auction.currentBid}`,
+                });
+            }
+
             return {
                 auctionId: auction._id,
                 status: "completed",
@@ -100,13 +111,24 @@ const processAuctionSettlement = async (auction) => {
         // Case 2: No bids, just mark completed
         auction.status = "completed";
         await auction.save({ session });
-
         await session.commitTransaction();
+        
+        //EMIT REAL-TIME EVENT: Auction ended with no bids
+        const io = global.io;
+        if (io) {
+            io.to(`lastcall:auction:${auction._id}`).emit("auctionEnded", {
+                auctionId: auction._id,
+                status: "completed",
+                message: "Auction ended with no bids",
+            });
+        }
+    
         return {
             auctionId: auction._id,
             status: "completed",
             message: "Auction ended with no bids",
         };
+
     } catch (error) {
         await session.abortTransaction();
         throw error;
@@ -116,7 +138,7 @@ const processAuctionSettlement = async (auction) => {
 };
 
 // @desc Check and settle all ended auctions (called by cron job)
-exports. checkAndSettleEndedAuctions = async() => {
+exports.checkAndSettleEndedAuctions = async () => {
     const now = new Date();
 
     // Find all active auctions that have passed their endTime
@@ -150,9 +172,4 @@ exports. checkAndSettleEndedAuctions = async() => {
     }
 
     return { settled: results.length, results };
-};
-
-module.exports = {
-    settleAuction: exports.settleAuction,
-    checkAndSettleEndedAuctions: exports.checkAndSettleEndedAuctions,
 };
