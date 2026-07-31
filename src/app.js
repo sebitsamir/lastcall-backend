@@ -37,12 +37,13 @@ const app = express();
 //Sets HTTP headers
 app.use(helmet());
 
-//CORS: Allow the frontend to talk to this API
+// CORS: Allow the frontend to talk to this API
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
-    credentials: true, //Allow httpOnly cookies to be sent
-  }),
+    // Allow multiple origins (Next.js default, Next.js custom port, and Vite)
+    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", process.env.CLIENT_URL].filter(Boolean),
+    credentials: true, // CRITICAL: Allows HttpOnly cookies to be sent
+  })
 );
 
 //Rate Limiting: Prevent Brute Force and DoS Attacks

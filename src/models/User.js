@@ -44,6 +44,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    watchlist: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Auction",
+      },
+    ],
   },
   {
     timestamps: true,
@@ -57,13 +63,20 @@ const userSchema = new mongoose.Schema(
   },
 );
 
-//Pre-save hook: Hash password before saving
-userSchema.pre("save", async function (next) {
-  //Only hash if password was modified(not other profile updates)
-  if (!this.isModified("password")) return next();
+// Modern Mongoose: Use 'async function(next)' OR just remove 'next()' entirely
+userSchema.pre('save', async function () {
+  // If password isn't modified, just call next and exit
+  if (!this.isModified('password')) {
+    return;
+  }
 
-  //12 salt rounds = Strong Security
-  this.password = await bcrypt.hash(this.password, 12);
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next(); // Tell Mongoose we are done
+  } catch (error) {
+    next(error); // Pass any errors to Mongoose
+  }
 });
 
 //Instance Method: Compare entered password with hashed password

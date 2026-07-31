@@ -13,7 +13,7 @@ exports.createAuction = asyncHandler(async (req, res, next) => {
 
     // Ensure images were uploaded
     if (!req.files || req.files.length === 0) {
-    return next(new AppError('Please upload at least one image for the auction.', 400));
+        return next(new AppError('Please upload at least one image for the auction.', 400));
     }
 
     // Upload images to Cloudinary
@@ -38,7 +38,7 @@ exports.createAuction = asyncHandler(async (req, res, next) => {
         images: imageUrls,
         seller: req.user._id, // From your auth middleware
         currentBid: req.body.startingPrice, // Initialize current bid to starting price
-        };
+    };
 
     const auction = await Auction.create(auctionData);
     ApiResponse.created(res, { auction }, 'Auction created successfully');
@@ -47,25 +47,61 @@ exports.createAuction = asyncHandler(async (req, res, next) => {
 // @desc    Get all auctions (with pagination & filtering)
 // @route   GET /api/v1/auctions
 // @access  Public
+// src/controllers/auctionController.js
+
 exports.getAuctions = asyncHandler(async (req, res, next) => {
+    // 1. Pagination Setup
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
 
-    // Build query
+    // 2. Build the Query (Secure & Conditional)
     const query = {};
-    if (req.query.category) query.category = req.query.category;
-    if (req.query.status) query.status = req.query.status;
-    if (req.query.seller) query.seller = req.query.seller;
 
+    // Default to active auctions for the public feed unless a specific status is requested
+    query.status = req.query.status || "active";
+
+    // Category Filter
+    if (req.query.category && req.query.category !== "all") {
+        query.category = req.query.category;
+    }
+
+    // Text Search Filter (Case-insensitive regex for title or description)
+    if (req.query.search) {
+        query.$or = [
+            { title: { $regex: req.query.search, $options: "i" } },
+            { description: { $regex: req.query.search, $options: "i" } }
+        ];
+    }
+
+    // Price Range Filter
+    if (req.query.minPrice || req.query.maxPrice) {
+        query.currentBid = {};
+        if (req.query.minPrice) query.currentBid.$gte = Number(req.query.minPrice);
+        if (req.query.maxPrice) query.currentBid.$lte = Number(req.query.maxPrice);
+    }
+
+    // 3. Dynamic Sorting
+    let sortOptions = { createdAt: -1 }; // Default: Newest first
+    if (req.query.sortBy === "endingSoon") {
+        sortOptions = { endTime: 1 }; // Ascending: Closest end time first
+    } else if (req.query.sortBy === "priceLow") {
+        sortOptions = { currentBid: 1 };
+    } else if (req.query.sortBy === "priceHigh") {
+        sortOptions = { currentBid: -1 };
+    }
+
+    // 4. Execute Query with Pagination & Population
     const totalAuctions = await Auction.countDocuments(query);
+
     const auctions = await Auction.find(query)
-        .populate('seller', 'name email')
-        .populate('currentHighestBidder', 'name')
-        .sort({ createdAt: -1 })
+        .populate("seller", "name email")
+        .populate("currentHighestBidder", "name")
+        .sort(sortOptions)
         .skip(skip)
         .limit(limit);
 
+    // 5. Return Structured Response
     ApiResponse.success(res, {
         auctions,
         pagination: {
@@ -73,7 +109,7 @@ exports.getAuctions = asyncHandler(async (req, res, next) => {
             totalPages: Math.ceil(totalAuctions / limit),
             totalAuctions,
         },
-    }, 'Auctions retrieved successfully');
+    }, "Auctions retrieved successfully");
 });
 
 // @desc    Get single auction details
@@ -108,7 +144,7 @@ exports.updateAuction = asyncHandler(async (req, res, next) => {
     if (auction.status !== 'upcoming') {
         return next(new AppError('Cannot update an auction that has already started or ended', 400));
     }
-    
+
     const updatedAuction = await Auction.findByIdAndUpdate(req.params.id, req.body, {
         new: true,
         runValidators: true,
@@ -127,7 +163,7 @@ exports.cancelAuction = asyncHandler(async (req, res, next) => {
     if (auction.seller.toString() !== req.user._id.toString()) {
         return next(new AppError('You are not authorized to cancel this auction', 403));
     }
-    
+
     if (auction.status === 'completed' || auction.status === 'cancelled') {
         return next(new AppError('Auction is already completed or cancelled', 400));
     }
@@ -137,27 +173,27 @@ exports.cancelAuction = asyncHandler(async (req, res, next) => {
     session.startTransaction();
 
     try {
-    // If there is a highest bidder, unfreeze their funds
-    if (auction.currentHighestBidder && auction.currentBid > 0) {
-        await User.findByIdAndUpdate(
-            auction.currentHighestBidder,
-            {
-                $inc: {
-                    availableBalance: auction.currentBid,
-                    frozenBalance: -auction.currentBid,
+        // If there is a highest bidder, unfreeze their funds
+        if (auction.currentHighestBidder && auction.currentBid > 0) {
+            await User.findByIdAndUpdate(
+                auction.currentHighestBidder,
+                {
+                    $inc: {
+                        availableBalance: auction.currentBid,
+                        frozenBalance: -auction.currentBid,
+                    },
                 },
-            },
                 { session }
-        );
-    }
+            );
+        }
 
-    // Mark auction as cancelled
-    auction.status = 'cancelled';
-    await auction.save({ session });
+        // Mark auction as cancelled
+        auction.status = 'cancelled';
+        await auction.save({ session });
 
-    await session.commitTransaction();
-    
-    ApiResponse.success(res, { auction }, 'Auction cancelled and funds refunded successfully');
+        await session.commitTransaction();
+
+        ApiResponse.success(res, { auction }, 'Auction cancelled and funds refunded successfully');
     } catch (error) {
         await session.abortTransaction();
         next(error);
