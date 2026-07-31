@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 const logger = require("../utils/logger");
 
 const connectDB = async () => {
+
+  console.log("=== RENDER ENV CHECK ===");
+  console.log("Does MONGO_URI exist?", process.env.MONGO_URI ? "YES" : "NO");
+  console.log("========================");
   try {
     const conn = await mongoose.connect(process.env.MONGO_URI, {
       maxPoolSize: 10, //Connection pooling
