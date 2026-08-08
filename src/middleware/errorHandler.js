@@ -14,8 +14,8 @@ const globalErrorHandler = (err, req, res, next) => {
 
   if (err.code === 11000) {
     //e.g., Duplicate email
-    const value = err.errmsg.match(/([^\"]+)/);
-    message = `Duplicate  field value: &{value[0]}. Please use another value!`;
+    const field = Object.keys(err.keyValue || {})[0] || "field";
+    message = `Duplicate ${field} value. Please use another value!`;
     statusCode = 400;
   }
 
@@ -31,7 +31,7 @@ const globalErrorHandler = (err, req, res, next) => {
   // Programming/Unexpected Errors: send generic message
   res.status(statusCode).json({
     status: err.status || "error",
-    message: err.isOperational ? message : "An expected error occurred.",
+    message: err.isOperational ? message : "An unexpected error occurred.",
     // Only send stack trace in development
     ...(process.env.NODE_ENV === "development" && {
       stack: err.stack,

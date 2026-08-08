@@ -8,13 +8,19 @@ const AppError = require("../utils/AppError");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require("../utils/apiResponse");
 
-//Helper: Set refresh token as a secure, httpOnly cookie
-const setRefreshCookie = (res, token) => {
-  res.cookie("refreshToken", token, {
-    httpOnly: true, //JS cannot read this cookie (XSS Protection)
-    sameSite: "strict", //CSRF Protection
+// Cross-site (Vercel frontend → Render API) requires SameSite=None + Secure
+const refreshCookieOptions = () => {
+  const isProd = process.env.NODE_ENV === "production";
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  });
+  };
+};
+
+const setRefreshCookie = (res, token) => {
+  res.cookie("refreshToken", token, refreshCookieOptions());
 };
 
 //@desc Register a new user
@@ -40,10 +46,13 @@ exports.register = asyncHandler(async (req, res, next) => {
       accessToken,
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
         availableBalance: user.availableBalance,
+        frozenBalance: user.frozenBalance,
+        isActive: user.isActive,
       },
     },
     "Registration successful",
@@ -81,11 +90,13 @@ exports.login = asyncHandler(async (req, res, next) => {
       accessToken,
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
         availableBalance: user.availableBalance,
         frozenBalance: user.frozenBalance,
+        isActive: user.isActive,
       },
     },
     "Login successful",
@@ -116,7 +127,7 @@ exports.refreshToken = asyncHandler(async (req, res, next) => {
 // @desc Logout user (clear cookie)
 // @route POST /api/v1/auth/logout
 exports.logout = (req, res) => {
-  res.clearCookie("refreshToken");
+  res.clearCookie("refreshToken", refreshCookieOptions());
   ApiResponse.success(res, null, "Logged out successfully");
 };
 

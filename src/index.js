@@ -11,9 +11,23 @@ const PORT = process.env.PORT || 3000;
 
 // 1. Create HTTP Server & Attach Socket.io
 const server = http.createServer(app);
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 const io = new Server(server, {
   cors: {
-    origin:  ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", process.env.CLIENT_URL].filter(Boolean),
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        /^https:\/\/([a-z0-9-]+\.)?vercel\.app$/i.test(origin);
+      if (isAllowed) return callback(null, true);
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
+    },
     credentials: true,
   },
 });

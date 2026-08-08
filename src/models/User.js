@@ -63,20 +63,14 @@ const userSchema = new mongoose.Schema(
   },
 );
 
-// Modern Mongoose: Use 'async function(next)' OR just remove 'next()' entirely
-userSchema.pre('save', async function () {
-  // If password isn't modified, just call next and exit
-  if (!this.isModified('password')) {
+// Async pre-save: do not call next() — returning a Promise is enough for Mongoose
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) {
     return;
   }
 
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next(); // Tell Mongoose we are done
-  } catch (error) {
-    next(error); // Pass any errors to Mongoose
-  }
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
 });
 
 //Instance Method: Compare entered password with hashed password

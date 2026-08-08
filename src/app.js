@@ -33,15 +33,31 @@ const globalErrorHandler = require("./middleware/errorHandler");
 
 const app = express();
 
+// Required on Render/Heroku so rate-limit and secure cookies see the real client IP/proto
+app.set("trust proxy", 1);
+
 //Security Hardening
 //Sets HTTP headers
 app.use(helmet());
 
-// CORS: Allow the frontend to talk to this API
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+// CORS: Allow the frontend to talk to this API (incl. Vercel preview URLs)
 app.use(
   cors({
-    // Allow multiple origins (Next.js default, Next.js custom port, and Vite)
-    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", process.env.CLIENT_URL].filter(Boolean),
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        /^https:\/\/([a-z0-9-]+\.)?vercel\.app$/i.test(origin);
+      if (isAllowed) return callback(null, true);
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
+    },
     credentials: true, // CRITICAL: Allows HttpOnly cookies to be sent
   })
 );
