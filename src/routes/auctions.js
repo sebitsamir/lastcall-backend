@@ -1,8 +1,13 @@
 const express = require("express");
 const router = express.Router();
 
-// 1. Import the protect middleware
+// 1. Import the  middlewares
 const { protect } = require("../middleware/auth");
+const validate = require("../middleware/validate");
+
+// 2. Import  the Validators
+const auctionValidator = require("../validators/auctionValidator");
+const bidValidator = require("../validators/bidValidator");
 
 // 2. Import controllers
 const auctionController = require("../controllers/auctionController");
@@ -25,8 +30,11 @@ router.post(
   auctionController.createAuction
 );
 
-router.patch("/:id", protect, auctionController.updateAuction);
-router.delete("/:id", protect, auctionController.cancelAuction);
-router.post("/:id/bid", protect, bidController.placeBid);
+router.post("/", protect, validate(auctionValidator.create), auctionController.createAuction);
+router.patch("/:id", protect, validate(auctionValidator.update), auctionController.updateAuction);
+router.post("/:id/cancel", protect, validate(auctionValidator.cancel), auctionController.cancelAuction);
+router.post("/:id/bid", protect, validate(bidValidator.place), bidController.placeBid);
 
 module.exports = router;
+
+

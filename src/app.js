@@ -121,6 +121,12 @@ app.use("/api/v1/auctions", auctionRoutes);
 const userRoutes = require("./routes/users");
 app.use("/api/v1/users", userRoutes);
 
+const uploadRoutes = require("./routes/uploads")
+app.use("/api/v1/uploads", uploadRoutes);
+
+const walletRoutes = require("./routes/wallet");
+app.use("/api/v1/users/wallet", walletRoutes);
+
 // 5. Error Handling
 // Catch unhandled routes (404)
 // app.use() without a path automatically catches everything that reaches it
