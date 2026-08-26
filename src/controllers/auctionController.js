@@ -109,7 +109,15 @@ exports.getAuctions = asyncHandler(async (req, res, next) => {
 exports.getAuctionById = asyncHandler(async (req, res, next) => {
     const auction = await Auction.findById(req.params.id)
         .populate('seller', 'name email')
-        .populate('currentHighestBidder', 'name');
+        .populate('currentHighestBidder', 'name')
+        .populate({
+            path: 'bids',
+            populate: {
+                path: 'bidder',
+                select: 'name'
+            },
+            options: { sort: { createdAt: -1 } } // Newest first
+        });
 
     if (!auction) {
         return next(new AppError('Auction not found', 404));
