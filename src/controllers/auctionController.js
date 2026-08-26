@@ -5,6 +5,7 @@ const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiResponse = require('../utils/apiResponse');
 const cloudinary = require('../config/cloudinary');
+const Bid = require('../models/Bid');
 
 // @desc    Create a new auction
 // @route   POST /api/v1/auctions
@@ -103,27 +104,35 @@ exports.getAuctions = asyncHandler(async (req, res, next) => {
     }, "Auctions retrieved successfully");
 });
 
-// @desc    Get single auction details
+// @desc    Get single auction details + bid history
 // @route   GET /api/v1/auctions/:id
 // @access  Public
 exports.getAuctionById = asyncHandler(async (req, res, next) => {
     const auction = await Auction.findById(req.params.id)
         .populate('seller', 'name email')
-        .populate('currentHighestBidder', 'name')
-        .populate({
-            path: 'bids',
-            populate: {
-                path: 'bidder',
-                select: 'name'
-            },
-            options: { sort: { createdAt: -1 } } // Newest first
-        });
+        .populate('currentHighestBidder', 'name');
 
     if (!auction) {
         return next(new AppError('Auction not found', 404));
     }
 
-    ApiResponse.success(res, { auction }, 'Auction retrieved successfully');
+    // Bid history lives in its own collection — query it separately.
+    // Works whether or not the Auction schema has a `bids` array.
+    let bids = [];
+    try {
+        bids = await Bid.find({ auction: auction._id })
+            .populate('bidder', 'name')
+            .sort({ createdAt: -1 })
+            .limit(50);
+    } catch (err) {
+        // History is an enhancement, never a page-breaker.
+        bids = [];
+    }
+
+    const payload = auction.toObject();
+    payload.bids = bids; // frontend reads data.bids defensively
+
+    ApiResponse.success(res, { auction: payload }, 'Auction retrieved successfully');
 });
 
 // @desc    Update auction (Only if upcoming and no bids)
