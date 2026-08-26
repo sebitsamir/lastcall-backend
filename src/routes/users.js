@@ -13,5 +13,6 @@ router.post("/balance/add", userController.addFunds);
 router.get("/transactions", userController.getTransactionHistory);
 router.post("/watchlist/:auctionId", protect, toggleWatchlist);
 router.get("/watchlist", protect, getWatchlist);
+router.get("/bids", protect, userController.getMyBids);
 
 module.exports = router;

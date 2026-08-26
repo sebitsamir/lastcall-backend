@@ -14,9 +14,8 @@ const auctionSchema = new mongoose.Schema(
         },
         category: {
             type: String,
-            required: true,
-            enum: [
-            "art", "electronics", "watches", "collectibles", "fashion", "sports", ], // Added sports
+            required: [true, 'An auction must have a category'],
+            enum: ['Art', 'Electronics', 'Watches', 'Collectibles', 'Fashion', 'Sports']
         },
         images: [
             {
@@ -32,32 +31,32 @@ const auctionSchema = new mongoose.Schema(
         currentBid: {
             type: Number,
             default: 0,
+        },
+        currentHighestBidder: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
+        seller: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+        },
+        startTime: {
+            type: Date,
+            required: true,
+        },
+        endTime: {
+            type: Date,
+            required: true,
+        },
+        status: {
+            type: String,
+            enum: ["upcoming", "active", "completed", "cancelled"],
+            default: "upcoming",
+        },
     },
-    currentHighestBidder: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-    },
-    seller: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: true,
-    },
-    startTime: {
-        type: Date,
-        required: true,
-    },
-    endTime: {
-        type: Date,
-        required: true,
-    },
-    status: {
-        type: String,
-        enum: ["upcoming", "active", "completed", "cancelled"],
-        default: "upcoming",
-    },
-},
-{ timestamps: true },
+    { timestamps: true },
 );
 
 // Compound index for efficiently querying active auctions ending soon

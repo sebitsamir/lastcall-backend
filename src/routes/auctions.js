@@ -18,17 +18,13 @@ const upload = require("../middleware/upload");
 // PUBLIC ROUTES
 // ==========================================
 router.get("/", auctionController.getAuctions);
+router.get("/mine", protect, auctionController.getMyAuctions);
 router.get("/:id", auctionController.getAuctionById);
 
 // ==========================================
 // PROTECTED ROUTES (protect MUST be here)
 // ==========================================
-router.post(
-  "/",
-  protect,
-  upload.array("images", 5),
-  auctionController.createAuction
-);
+router.post("/", protect, validate(auctionValidator.create), auctionController.createAuction);
 
 router.post("/", protect, validate(auctionValidator.create), auctionController.createAuction);
 router.patch("/:id", protect, validate(auctionValidator.update), auctionController.updateAuction);

@@ -1,12 +1,12 @@
 const cloudinary = require("../config/cloudinary");
-const catchAsync = require("../utils/asyncHandler"); 
+const asyncHandler = require("../utils/asyncHandler");
 const AppError = require("../utils/AppError");
 
 /**
  * @desc    Upload image buffer to Cloudinary and return the secure URL
  * @route   POST /api/v1/uploads
  */
-exports.uploadImage = catchAsync(async (req, res, next) => {
+exports.uploadImage = asyncHandler(async (req, res, next) => {
     // 1. Ensure Multer actually caught a file
     if (!req.file) {
         return next(new AppError("Please upload an image file.", 400));

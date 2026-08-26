@@ -1,14 +1,14 @@
 // src/controllers/walletController.js
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
-const catchAsync = require("../utils/asyncHandler");
+const asyncHandler = require("../utils/asyncHandler");
 const AppError = require("../utils/AppError");
 
 /**
  * @desc    Get user wallet balance
  * @route   GET /api/v1/users/wallet
  */
-exports.getBalance = catchAsync(async (req, res, next) => {
+exports.getBalance = asyncHandler(async (req, res, next) => {
     const user = await User.findById(req.user._id).select("availableBalance frozenBalance");
     if (!user) return next(new AppError("User not found", 404));
 
@@ -26,7 +26,7 @@ exports.getBalance = catchAsync(async (req, res, next) => {
  * @desc    Deposit funds into available balance
  * @route   POST /api/v1/users/wallet/deposit
  */
-exports.deposit = catchAsync(async (req, res, next) => {
+exports.deposit = asyncHandler(async (req, res, next) => {
     const { amount } = req.body;
 
     if (!amount || amount <= 0) {
@@ -61,7 +61,7 @@ exports.deposit = catchAsync(async (req, res, next) => {
  * @desc    Get paginated transaction history
  * @route   GET /api/v1/users/wallet/transactions
  */
-exports.getTransactions = catchAsync(async (req, res, next) => {
+exports.getTransactions = asyncHandler(async (req, res, next) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;

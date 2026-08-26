@@ -1,7 +1,8 @@
 const User = require('../models/User');
+const Bid = require("../models/Bid");
 const Transaction = require('../models/Transaction');
 const AppError = require('../utils/AppError');
-const asyncHandler = require('../utils/asyncHandler');
+const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require('../utils/apiResponse');
 const mongoose = require('mongoose');
 
@@ -145,4 +146,24 @@ exports.getWatchlist = asyncHandler(async (req, res, next) => {
     });
 
     ApiResponse.success(res, user.watchlist, "Watchlist retrieved");
+});
+
+
+// @desc    Get the signed-in user's bids with their auctions populated
+// @route   GET /api/v1/users/bids
+// @access  Private
+
+exports.getMyBids = asyncHandler(async (req, res, next) => {
+    const bids = await Bid.find({ bidder: req.user._id })
+        .sort({ createdAt: -1 })
+        .populate({
+            path: "auction",
+            select:
+                "title images category status currentBid startingPrice endTime highestBidder",
+        });
+
+    res.status(200).json({
+        status: "success",
+        data: bids, // bare array — the frontend normalizeMyBids handles it
+    });
 });

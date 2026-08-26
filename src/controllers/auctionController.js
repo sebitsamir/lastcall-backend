@@ -10,34 +10,25 @@ const cloudinary = require('../config/cloudinary');
 // @route   POST /api/v1/auctions
 // @access  Private
 exports.createAuction = asyncHandler(async (req, res, next) => {
-
-    // Ensure images were uploaded
-    if (!req.files || req.files.length === 0) {
-        return next(new AppError('Please upload at least one image for the auction.', 400));
+    // 1. The frontend already uploaded images to Cloudinary via /uploads.
+    // We just need to verify the URLs arrived in the JSON body.
+    const { images } = req.body;
+    if (!images || !Array.isArray(images) || images.length === 0) {
+        return next(new AppError("Please upload at least one image for the auction.", 400));
     }
 
-    // Upload images to Cloudinary
-    const uploadPromises = req.files.map((file) =>
-        new Promise((resolve, reject) => {
-            const stream = cloudinary.uploader.upload_stream(
-                { folder: 'lastcall_auctions' },
-                (error, result) => {
-                    if (error) reject(error);
-                    else resolve(result.secure_url);
-                }
-            );
-            stream.end(file.buffer);
-        })
-    );
-
-    const imageUrls = await Promise.all(uploadPromises);
-
-    // Create auction
+    // 2. Build the auction document using the pre-uploaded URLs
     const auctionData = {
-        ...req.body,
-        images: imageUrls,
-        seller: req.user._id, // From your auth middleware
-        currentBid: req.body.startingPrice, // Initialize current bid to starting price
+        title: req.body.title,
+        description: req.body.description,
+        category: req.body.category,
+        images: images, // Direct assignment, no Cloudinary stream needed here!
+        startingPrice: Number(req.body.startingPrice),
+        startTime: req.body.startTime || undefined,
+        endTime: req.body.endTime,
+        seller: req.user._id,
+        currentBid: Number(req.body.startingPrice), // Initialize current bid
+        status: req.body.startTime && new Date(req.body.startTime) > new Date() ? 'upcoming' : 'active',
     };
 
     const auction = await Auction.create(auctionData);
@@ -200,4 +191,20 @@ exports.cancelAuction = asyncHandler(async (req, res, next) => {
     } finally {
         session.endSession();
     }
+});
+
+
+// @desc    Get all auctions created by the signed-in seller
+// @route   GET /api/v1/auctions/mine
+// @access  Private
+
+exports.getMyAuctions = asyncHandler(async (req, res, next) => {
+    const auctions = await Auction.find({ seller: req.user._id }).sort({
+        createdAt: -1,
+    });
+
+    res.status(200).json({
+        status: "success",
+        data: { auctions },
+    });
 });
