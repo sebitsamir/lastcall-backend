@@ -4,10 +4,10 @@ const Transaction = require("../models/Transaction");
 const asyncHandler = require("../utils/asyncHandler");
 const AppError = require("../utils/AppError");
 
-/**
- * @desc    Get user wallet balance
- * @route   GET /api/v1/users/wallet
- */
+
+// @desc    Get user wallet balance
+// @route   GET /api/v1/users/wallet
+
 exports.getBalance = asyncHandler(async (req, res, next) => {
     const user = await User.findById(req.user._id).select("availableBalance frozenBalance");
     if (!user) return next(new AppError("User not found", 404));
@@ -22,29 +22,33 @@ exports.getBalance = asyncHandler(async (req, res, next) => {
     });
 });
 
-/**
- * @desc    Deposit funds into available balance
- * @route   POST /api/v1/users/wallet/deposit
- */
+
+// @desc    Deposit funds into available balance (Demo gateway)
+// @route   POST /api/v1/users/wallet/deposit
+
 exports.deposit = asyncHandler(async (req, res, next) => {
     const { amount } = req.body;
 
-    if (!amount || amount <= 0) {
-        return next(new AppError("Please provide a valid deposit amount greater than 0", 400));
+    // Replace this simulated gateway with Stripe Checkout.
+    // The wallet ledger below stays exactly as-is — only the entry point changes.
+    const numericAmount = Number(amount);
+
+    if (!amount || numericAmount < 1 || numericAmount > 10000) {
+        return next(new AppError("Demo top-ups are limited to $1 – $10,000.", 400));
     }
 
     const user = await User.findById(req.user._id);
     if (!user) return next(new AppError("User not found", 404));
 
     // 1. Update balance
-    user.availableBalance = (user.availableBalance || 0) + Number(amount);
+    user.availableBalance = (user.availableBalance || 0) + numericAmount;
     await user.save({ validateBeforeSave: false });
 
     // 2. Record the ledger entry
     await Transaction.create({
         user: user._id,
         type: "deposit",
-        amount: Number(amount),
+        amount: numericAmount,
         description: "Funds added to wallet",
     });
 
@@ -57,10 +61,10 @@ exports.deposit = asyncHandler(async (req, res, next) => {
     });
 });
 
-/**
- * @desc    Get paginated transaction history
- * @route   GET /api/v1/users/wallet/transactions
- */
+
+// @desc    Get paginated transaction history
+// @route   GET /api/v1/users/wallet/transactions
+
 exports.getTransactions = asyncHandler(async (req, res, next) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
