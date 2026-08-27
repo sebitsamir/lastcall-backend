@@ -14,18 +14,12 @@ const auctionController = require("../controllers/auctionController");
 const bidController = require("../controllers/bidController");
 const upload = require("../middleware/upload");
 
-// ==========================================
 // PUBLIC ROUTES
-// ==========================================
 router.get("/", auctionController.getAuctions);
 router.get("/mine", protect, auctionController.getMyAuctions);
 router.get("/:id", auctionController.getAuctionById);
 
-// ==========================================
 // PROTECTED ROUTES (protect MUST be here)
-// ==========================================
-router.post("/", protect, validate(auctionValidator.create), auctionController.createAuction);
-
 router.post("/", protect, validate(auctionValidator.create), auctionController.createAuction);
 router.patch("/:id", protect, validate(auctionValidator.update), auctionController.updateAuction);
 router.post("/:id/cancel", protect, validate(auctionValidator.cancel), auctionController.cancelAuction);

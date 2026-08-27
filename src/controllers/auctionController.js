@@ -4,7 +4,6 @@ const User = require('../models/User');
 const AppError = require('../utils/AppError');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiResponse = require('../utils/apiResponse');
-const cloudinary = require('../config/cloudinary');
 const Bid = require('../models/Bid');
 
 // @desc    Create a new auction
@@ -118,16 +117,10 @@ exports.getAuctionById = asyncHandler(async (req, res, next) => {
 
     // Bid history lives in its own collection — query it separately.
     // Works whether or not the Auction schema has a `bids` array.
-    let bids = [];
-    try {
-        bids = await Bid.find({ auction: auction._id })
-            .populate('bidder', 'name')
-            .sort({ createdAt: -1 })
-            .limit(50);
-    } catch (err) {
-        // History is an enhancement, never a page-breaker.
-        bids = [];
-    }
+    const bids = await Bid.find({ auction: auction._id })
+        .populate('bidder', 'name')
+        .sort({ createdAt: -1 })
+        .limit(50);
 
     const payload = auction.toObject();
     payload.bids = bids; // frontend reads data.bids defensively
@@ -179,6 +172,19 @@ exports.cancelAuction = asyncHandler(async (req, res, next) => {
     // Start transaction to safely refund the highest bidder
     const session = await mongoose.startSession();
     session.startTransaction();
+
+    await Transaction.create(
+        [
+            {
+                user: auction.currentHighestBidder,
+                type: "refund",
+                amount: auction.currentBid,
+                description: `Auction cancelled: ${auction.title}`,
+                auction: auction._id,
+            },
+        ],
+        { session }
+    );
 
     try {
         // If there is a highest bidder, unfreeze their funds

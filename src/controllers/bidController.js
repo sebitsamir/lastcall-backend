@@ -1,84 +1,90 @@
+// src/controllers/bidController.js
 const mongoose = require("mongoose");
-const Bid = require("../models/Bid");
 const Auction = require("../models/Auction");
+const Bid = require("../models/Bid");
 const User = require("../models/User");
-const Transaction = require("../models/Transaction");
 const AppError = require("../utils/AppError");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require("../utils/apiResponse");
 const logger = require("../utils/logger");
 
+/**
+ * @desc    Place a bid on an auction
+ * @route   POST /api/v1/auctions/:auctionId/bid
+ */
 exports.placeBid = asyncHandler(async (req, res, next) => {
-  // 1. SAFETY CHECK: Ensure protect middleware actually ran
-  if (!req.user || !req.user._id) {
-    return next(new AppError("Authentication failed. Please log in to bid.", 401));
-  }
-
-  const auctionId = req.params.id;
+  const { auctionId } = req.params;
   const { amount } = req.body;
   const bidderId = req.user._id;
 
-  // 2. Find the auction
-  const auction = await Auction.findById(auctionId);
-  if (!auction) {
-    return next(new AppError("Auction not found", 404));
+  // 1. Validate bid amount
+  if (!amount || typeof amount !== "number" || amount <= 0) {
+    return next(new AppError("Invalid bid amount", 400));
   }
 
-  // 3. Validate auction status
-  if (auction.status !== "active") {
-    return next(new AppError("This auction is not currently active", 400));
-  }
-
-  // 4. Prevent seller from bidding on their own auction
-  if (auction.seller.toString() === bidderId.toString()) {
-    return next(new AppError("You cannot bid on your own auction", 403));
-  }
-
-  // 5. Validate bid amount
-  if (amount <= auction.currentBid) {
-    return next(new AppError(`Bid must be higher than the current bid of ${auction.currentBid}`, 409));
-  }
-
-  // 6. Check bidder's balance
-  const bidder = await User.findById(bidderId);
-  if (bidder.availableBalance < amount) {
-    return next(new AppError("Insufficient available balance to place this bid", 422));
-  }
-
-  // 7. Execute Transaction (Escrow Logic)
+  // 2. Fetch auction with lock (for transaction safety)
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // A. If there was a previous highest bidder, unfreeze their money
-    if (auction.currentHighestBidder && auction.currentBid > 0) {
-      await User.findByIdAndUpdate(
-        auction.currentHighestBidder,
-        {
-          $inc: {
-            availableBalance: auction.currentBid,
-            frozenBalance: -auction.currentBid,
-          },
-        },
-        { session }
-      );
+    const auction = await Auction.findById(auctionId).session(session);
+    if (!auction) {
+      await session.abortTransaction();
+      return next(new AppError("Auction not found", 404));
+    }
 
-      await Transaction.create(
-        [
-          {
-            user: auction.currentHighestBidder,
-            type: "bid_released",
-            amount: auction.currentBid,
-            description: `Outbid on auction: ${auction.title}`,
-            auction: auction._id,
-            status: "completed",
-          },
-        ],
-        { session }
+    // 3. Check auction state
+    if (auction.status !== "active") {
+      await session.abortTransaction();
+      return next(new AppError("Auction is not active", 400));
+    }
+
+    if (auction.endTime && new Date(auction.endTime) < new Date()) {
+      await session.abortTransaction();
+      return next(new AppError("Auction has ended", 400));
+    }
+
+    // 4. Validate bid is higher than current
+    const minimumBid = (auction.currentBid || auction.startingPrice || 0) + 1;
+    if (amount < minimumBid) {
+      await session.abortTransaction();
+      return next(
+        new AppError(
+          `Bid must be at least $${minimumBid}. Current bid is $${auction.currentBid || auction.startingPrice}`,
+          400
+        )
       );
     }
 
-    // B. Freeze the new bidder's money
+    // 5. Capture previous state for outbid notification
+    const previousHighestBidder = auction.currentHighestBidder;
+    const previousBid = auction.currentBid || auction.startingPrice || 0;
+
+    // 6. Check if bidder is the seller
+    if (auction.seller.toString() === bidderId.toString()) {
+      await session.abortTransaction();
+      return next(new AppError("Sellers cannot bid on their own auctions", 400));
+    }
+
+    // 7. Fetch bidder
+    const bidder = await User.findById(bidderId).session(session);
+    if (!bidder) {
+      await session.abortTransaction();
+      return next(new AppError("Bidder not found", 404));
+    }
+
+    // 8. Check available balance
+    if (bidder.availableBalance < amount) {
+      await session.abortTransaction();
+      return next(
+        new AppError(
+          `Insufficient balance. You have $${bidder.availableBalance.toFixed(2)} available`,
+          400
+        )
+      );
+    }
+
+    // 9. Freeze funds for this bid
     await User.findByIdAndUpdate(
       bidderId,
       {
@@ -90,88 +96,98 @@ exports.placeBid = asyncHandler(async (req, res, next) => {
       { session }
     );
 
-    await Transaction.create(
-      [
+    // 10. Refund previous highest bidder (if any)
+    if (previousHighestBidder && previousBid > 0) {
+      await User.findByIdAndUpdate(
+        previousHighestBidder,
         {
-          user: bidderId,
-          type: "bid_frozen",
-          amount: amount,
-          description: `Bid placed on auction: ${auction.title}`,
-          auction: auction._id,
-          status: "completed",
+          $inc: {
+            availableBalance: previousBid,
+            frozenBalance: -previousBid,
+          },
         },
-      ],
-      { session }
+        { session }
+      );
+    }
+
+    // 11. Update auction with optimistic concurrency check
+    const updatedAuction = await Auction.findOneAndUpdate(
+      {
+        _id: auctionId,
+        status: "active",
+        currentBid: previousBid, // ← ensures no concurrent bid won the race
+      },
+      {
+        $set: {
+          currentBid: amount,
+          currentHighestBidder: bidderId,
+        },
+      },
+      {
+        new: true,
+        session,
+      }
     );
 
-    // C. Update the auction with the new bid
-    auction.currentBid = amount;
-    auction.currentHighestBidder = bidderId;
-    await auction.save({ session });
+    if (!updatedAuction) {
+      // Another bid won the race — abort everything
+      await session.abortTransaction();
+      return next(
+        new AppError("Another bid was placed. Please try again.", 409)
+      );
+    }
 
-    // D. Create the Bid record
+    // 12. Create bid record
     await Bid.create(
       [
         {
           auction: auctionId,
           bidder: bidderId,
-          amount: amount,
+          amount,
         },
       ],
       { session }
     );
 
-    // E. Commit the transaction
+    // 13. Commit transaction
     await session.commitTransaction();
-    
+
+    // 14. Emit real-time events (after commit)
+    if (global.io) {
+      // Notify auction room of new bid
+      global.io.to(`lastcall:auction:${auctionId}`).emit("newBid", {
+        auctionId,
+        currentBid: amount,
+        bidderName: bidder.name,
+        bidCount: await Bid.countDocuments({ auction: auctionId }),
+      });
+
+      // Notify previous highest bidder they've been outbid
+      if (previousHighestBidder && previousHighestBidder.toString() !== bidderId.toString()) {
+        global.io.to(`lastcall:user:${previousHighestBidder}`).emit("outbid", {
+          auctionId,
+          auctionTitle: auction.title,
+          previousBid,
+          currentBid: amount,
+          releasedAmount: previousBid,
+        });
+      }
+    }
+
+    // 15. Return success
+    ApiResponse.success(
+      res,
+      {
+        auction: updatedAuction,
+        message: `Bid of $${amount} placed successfully`,
+      },
+      "Bid placed successfully"
+    );
   } catch (error) {
-    // Only abort if the transaction hasn't been committed yet
     await session.abortTransaction();
-    return next(error);
+    logger.error("Bid placement failed:", error);
+    next(error);
   } finally {
     session.endSession();
   }
-
-
-  // REAL-TIME EVENTS & RESPONSE (OUTSIDE TRANSACTION)
-
-  // Emit Real-Time Events
-  if (global.io) {
-    logger.info(`Emitting newBid for auction: ${auctionId}`);
-    
-    // 1. Public event: Everyone watching sees the new bid
-    global.io.to(`lastcall:auction:${auctionId}`).emit("newBid", {
-      auctionId,
-      currentBid: auction.currentBid,
-      bidderName: bidder.name,
-      timestamp: new Date().toISOString(),
-    });
-
-    // 2. Private event: If there was a previous bidder, tell them they're outbid
-    if (
-      auction.currentHighestBidder &&
-      auction.currentHighestBidder.toString() !== bidderId.toString()
-    ) {
-      global.io.to(`lastcall:auction:${auctionId}`).emit("outbid", {
-        auctionId,
-        previousBid: auction.currentBid,
-        message: `You have been outbid on "${auction.title}"!`,
-      });
-    }
-  } else {
-    logger.warn("global.io is undefined! Real-time events will not fire.");
-  }
-
-  // Send Success Response
-  ApiResponse.success(
-    res,
-    {
-      auction: {
-        id: auction._id,
-        currentBid: auction.currentBid,
-        currentHighestBidder: auction.currentHighestBidder,
-      },
-    },
-    "Bid placed successfully"
-  );
 });

@@ -75,14 +75,6 @@ const globalLimiter = ratelimit({
 });
 app.use("/api", globalLimiter);
 
-//Stricter limit specifically for Auth endpoints
-const authLimiter = ratelimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10, //10 login/register attempts per 15 minutes
-  message: { error: "Too many login attempts. Try again in 15 mins." },
-});
-//This will be applied directly to the auth routes later
-
 // 2. Data Parsing & Sanitization
 //Body Parser with size limit (Prevents DoS via massive JSON payloads)
 app.use(express.json({ limit: "10kb" }));

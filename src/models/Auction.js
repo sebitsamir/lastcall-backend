@@ -11,18 +11,24 @@ const auctionSchema = new mongoose.Schema(
         description: {
             type: String,
             required: [true, "Description is required"],
+            maxlength: [5000, "Description cannot exceed 5000 characters"],
         },
+
         category: {
             type: String,
             required: [true, 'An auction must have a category'],
             enum: ['Art', 'Electronics', 'Watches', 'Collectibles', 'Fashion', 'Sports']
         },
-        images: [
-            {
-                type: String,
-                required: true,
+        images: {
+            type: [String],
+            validate: {
+                validator: function (arr) {
+                    return arr.length >= 1 && arr.length <= 10;
+                },
+                message: "Auction must have between 1 and 10 images",
             },
-        ], // Holds Cloudinary URLs
+        },
+
         startingPrice: {
             type: Number,
             required: true,
@@ -48,7 +54,13 @@ const auctionSchema = new mongoose.Schema(
         },
         endTime: {
             type: Date,
-            required: true,
+            required: [true, "End time is required"],
+            validate: {
+                validator: function (value) {
+                    return value > this.startTime || value > new Date();
+                },
+                message: "End time must be after start time or now",
+            },
         },
         status: {
             type: String,

@@ -1,175 +1,129 @@
-const mongoose = require('mongoose');
-const Auction = require('../models/Auction');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const AppError = require('../utils/AppError');
-const asyncHandler = require('../utils/asyncHandler');
-const ApiResponse = require('../utils/apiResponse');
+// src/controllers/settlementController.js
+const mongoose = require("mongoose");
+const Auction = require("../models/Auction");
+const User = require("../models/User");
+const Transaction = require("../models/Transaction");
+const asyncHandler = require("../utils/asyncHandler");
+const AppError = require("../utils/AppError");
+const logger = require("../utils/logger");
 
-// @desc Manually settle an auction (for testing or admin use)
-// @route POST /api/v1/auctions/:auctionId/settle
-// @access Private(Seller or Admin)
-exports.settleAuction = asyncHandler(async (req, res, next) => {
-    const { auctionId } = req.params;
-
-    const auction = await Auction.findById(auctionId);
-
-    if (!auction) {
-        return next(new AppError("Auction not found", 404));
-    }
-
-    // Authorization: Only Seller or admin can manually settle
-    if (
-        auction.seller.toString() !== req.user._id.toString() &&
-        req.user.role !== "admin"
-    ) {
-        return next(new AppError("You are not authorized to settle this auction", 403));
-    }
-
-    if (auction.status === "completed" || auction.status === "cancelled") {
-        return next(new AppError("Auction is already completed or cancelled", 400));
-    }
-
-    // Perform the settlement
-    const result = await processAuctionSettlement(auction);
-
-    ApiResponse.success(res, result, "Auction settled successfully");
-});
-
-// @desc Process auction settlement (Called by cron job or manually)
-// This is the core logic that handles fund transfers
-const processAuctionSettlement = async (auction) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-        // Case 1: Auction has a winner (the highest bidder exists)
-        if (auction.currentHighestBidder && auction.currentBid > 0) {
-            // 1. Transfer funds from winner's frozen balance to seller's available balance
-            await User.findByIdAndUpdate(
-                auction.currentHighestBidder,
-                { $inc: { frozenBalance: -auction.currentBid } }, // Unfreeze winner's money
-                { session }
-            );
-
-            await User.findByIdAndUpdate(
-                auction.seller,
-                { $inc: { availableBalance: auction.currentBid } }, // Pay the seller
-                { session }
-            );
-
-            // 2. Log transactions for BOTH parties
-            await Transaction.create(
-                [
-                    {
-                        user: auction.currentHighestBidder,
-                        type: "auction_won",
-                        amount: auction.currentBid,
-                        description: `Won auction: ${auction.title}`,
-                        auction: auction._id,
-                        status: "completed",
-                    },
-                    {
-                        user: auction.seller,
-                        type: "auction_payout",
-                        amount: auction.currentBid,
-                        description: `Received payment for auction: ${auction.title}`,
-                        auction: auction._id,
-                        status: "completed",
-                    },
-                ],
-                { session }
-            );
-
-            // 3. Mark auction as completed
-            auction.status = "completed";
-            await auction.save({ session });
-
-            await session.commitTransaction();
-
-            // EMIT REAL-TIME EVENT: Auction ended with a winner
-            const io = global.io;
-            if (io) {
-                io.to(`lastcall:auction:${auction._id}`).emit("auctionEnded", {
-                    auctionId: auction._id,
-                    status: "completed",
-                    winnerId: auction.currentHighestBidder,
-                    winningBid: auction.currentBid,
-                    message: `Auction ended! Winner paid ${auction.currentBid}`,
-                });
-            }
-
-            return {
-                auctionId: auction._id,
-                status: "completed",
-                winner: auction.currentHighestBidder,
-                winningBid: auction.currentBid,
-                seller: auction.seller,
-            };
-        }
-
-        // Case 2: No bids, just mark completed
-        auction.status = "completed";
-        await auction.save({ session });
-        await session.commitTransaction();
-        
-        //EMIT REAL-TIME EVENT: Auction ended with no bids
-        const io = global.io;
-        if (io) {
-            io.to(`lastcall:auction:${auction._id}`).emit("auctionEnded", {
-                auctionId: auction._id,
-                status: "completed",
-                message: "Auction ended with no bids",
-            });
-        }
-    
-        return {
-            auctionId: auction._id,
-            status: "completed",
-            message: "Auction ended with no bids",
-        };
-
-    } catch (error) {
-        await session.abortTransaction();
-        throw error;
-    } finally {
-        session.endSession();
-    }
-};
-
-// @desc Check and settle all ended auctions (called by cron job)
-exports.checkAndSettleEndedAuctions = async () => {
+/**
+ * @desc    Settle completed auctions (release winner funds, pay seller)
+ * @route   POST /api/v1/settlement/process
+ * @access  Private (Admin/System only)
+ */
+exports.processSettlement = asyncHandler(async (req, res, next) => {
     const now = new Date();
 
-    // Find all active auctions that have passed their endTime
-    const endedAuctions = await Auction.find({
+    // Find auctions that have ended and are still active
+    const auctions = await Auction.find({
         status: "active",
         endTime: { $lte: now },
     });
 
-    if (endedAuctions.length === 0) {
-        console.log("[Settlement] No auctions to settle at", now.toISOString());
-        return { settled: 0 };
+    if (auctions.length === 0) {
+        return res.status(200).json({
+            status: "success",
+            message: "No auctions to settle",
+            data: { settled: 0 },
+        });
     }
 
-    console.log(`[Settlement] Found ${endedAuctions.length} auction(s) to settle`);
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    const results = [];
+    let settledCount = 0;
 
-    for (const auction of endedAuctions) {
-        try {
-            const result = await processAuctionSettlement(auction);
-            results.push(result);
-            console.log(`[Settlement] Successfully settled auction ${auction._id}`);
-        } catch (error) {
-            console.log(`[Settlement] Failed to settle auction ${auction._id}:`, error.message);
-            results.push({
-                auctionId: auction._id,
-                status: "failed",
-                error: error.message,
-            });
+    try {
+        for (const auction of auctions) {
+            // Atomic state transition: only settle if still active
+            const transitioned = await Auction.findOneAndUpdate(
+                {
+                    _id: auction._id,
+                    status: "active", // ← prevents double-settlement
+                },
+                { $set: { status: "completed" } },
+                { new: true, session }
+            );
+
+            if (!transitioned) {
+                // Another process already settled this auction
+                continue;
+            }
+
+            // If there's a winner, release their frozen funds and pay seller
+            if (auction.currentHighestBidder && auction.currentBid > 0) {
+                // Release winner's frozen funds
+                await User.findByIdAndUpdate(
+                    auction.currentHighestBidder,
+                    {
+                        $inc: {
+                            frozenBalance: -auction.currentBid,
+                        },
+                    },
+                    { session }
+                );
+
+                // Pay seller
+                await User.findByIdAndUpdate(
+                    auction.seller,
+                    {
+                        $inc: {
+                            availableBalance: auction.currentBid,
+                        },
+                    },
+                    { session }
+                );
+
+                // Record transaction for winner
+                await Transaction.create(
+                    [
+                        {
+                            user: auction.currentHighestBidder,
+                            type: "purchase",
+                            amount: auction.currentBid,
+                            description: `Won auction: ${auction.title}`,
+                            auction: auction._id,
+                        },
+                    ],
+                    { session }
+                );
+
+                // Record transaction for seller
+                await Transaction.create(
+                    [
+                        {
+                            user: auction.seller,
+                            type: "sale",
+                            amount: auction.currentBid,
+                            description: `Sold: ${auction.title}`,
+                            auction: auction._id,
+                        },
+                    ],
+                    { session }
+                );
+
+                logger.info(
+                    `Settled auction ${auction._id}: $${auction.currentBid} transferred to seller ${auction.seller}`
+                );
+            }
+
+            settledCount++;
         }
-    }
 
-    return { settled: results.length, results };
-};
+        await session.commitTransaction();
+
+        res.status(200).json({
+            status: "success",
+            message: `Settled ${settledCount} auction(s)`,
+            data: { settled: settledCount },
+        });
+    } catch (error) {
+        await session.abortTransaction();
+        logger.error("Settlement failed:", error);
+        next(error);
+    } finally {
+        session.endSession();
+    }
+});
+

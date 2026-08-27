@@ -1,48 +1,84 @@
-require("dotenv").config();
+// src/index.js
 const http = require("http");
-const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 const app = require("./app");
-const connectDB = require("./config/db");
+const connectDB = require("./config/database");
 const logger = require("./utils/logger");
-const settlementJob = require("./jobs/settlementJob");
+const jwt = require("jsonwebtoken");
+const User = require("./models/User");
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
-// 1. Create HTTP Server & Attach Socket.io
+// Create HTTP server
 const server = http.createServer(app);
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "http://localhost:5173",
-  process.env.CLIENT_URL,
-].filter(Boolean);
 
+// Socket.IO setup
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const isAllowed =
-        allowedOrigins.includes(origin) ||
-        /^https:\/\/([a-z0-9-]+\.)?vercel\.app$/i.test(origin);
-      if (isAllowed) return callback(null, true);
-      return callback(new Error(`Not allowed by CORS: ${origin}`));
-    },
+    origin:
+      process.env.NODE_ENV === "production"
+        ? process.env.CLIENT_URL
+        : ["http://localhost:3000", "http://localhost:3001"],
     credentials: true,
   },
 });
 
+// Make io accessible to controllers
 global.io = io;
-app.set("io", io);
 
-// 2. Socket.io Connection Logic
+// Socket authentication middleware
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+
+    if (!token) {
+      // Allow unauthenticated connections (for public auction updates)
+      socket.user = null;
+      return next();
+    }
+
+    // Verify JWT
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select("-password");
+
+    if (!user) {
+      return next(new Error("User not found"));
+    }
+
+    // Attach user to socket
+    socket.user = user;
+    next();
+  } catch (error) {
+    logger.warn("Socket authentication failed:", error.message);
+    next(new Error("Authentication failed"));
+  }
+});
+
+// Socket connection handler
 io.on("connection", (socket) => {
   logger.info(`Socket connected: ${socket.id}`);
 
-  // Clients will join specific auction rooms to get live updates
-  socket.on("joinAuction", (auctionId) => {
+  // Join user's private room (for outbid notifications)
+  if (socket.user) {
+    const userId = socket.user._id.toString();
+    socket.join(`lastcall:user:${userId}`);
+    logger.info(`User ${userId} joined private room`);
+  }
+
+  // Join auction room (public)
+  socket.on("joinAuction", async (auctionId) => {
+    if (!auctionId) return;
+
     socket.join(`lastcall:auction:${auctionId}`);
-    logger.info(`Socket ${socket.id} joined auction room: ${auctionId}`);
+    logger.info(`Socket ${socket.id} joined auction ${auctionId}`);
+  });
+
+  // Leave auction room
+  socket.on("leaveAuction", (auctionId) => {
+    if (!auctionId) return;
+
+    socket.leave(`lastcall:auction:${auctionId}`);
+    logger.info(`Socket ${socket.id} left auction ${auctionId}`);
   });
 
   socket.on("disconnect", () => {
@@ -50,19 +86,10 @@ io.on("connection", (socket) => {
   });
 });
 
-// 3. Database Connection & Server startup
+// Start server
 connectDB().then(() => {
-  const serverInstance = server.listen(PORT, () => {
-    logger.info(`lastCall API running on port ${PORT}`);
-  });
-
-  // Start the settlement cron job
-  settlementJob.start();
-  logger.info("[Cron] Auction settlement job started");
-
-  // 4. Graceful shutdown Handler
-  process.on("unhandledRejection", (err) => {
-    logger.error("UNHANDLED REJECTION! Shutting down...");
-    serverInstance.close(() => process.exit(1));
+  server.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`);
+    logger.info(`Socket.IO ready`);
   });
 });
